@@ -1,0 +1,259 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// NOTE: Using PostgreSQL enums. All roles and statuses defined below.
+// ============================================================================
+
+// ============================================================================
+// MODELS
+// ============================================================================
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  name              String
+  passwordHash      String?
+  googleId          String?   @unique
+  role              String    @default("VENDOR")
+  isEmailVerified   Boolean   @default(false)
+  emailVerifyToken  String?
+  emailVerifyExpiry DateTime?
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+  isActive          Boolean   @default(true)
+
+  vendor            Vendor?
+  createdRFQs       RFQ[]     @relation("RFQCreator")
+  createdApprovals  Approval[] @relation("ApprovalCreator")
+  approvedBy        Approval[] @relation("ApprovalApprover")
+  createdPOs        PurchaseOrder[] @relation("POCreator")
+  activityLogs      ActivityLog[]
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive])
+}
+
+model Vendor {
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  companyName       String
+  gstNumber         String?
+  panNumber         String?
+  contactPerson     String?
+  email             String
+  phone             String
+  address           String
+  city              String
+  state             String
+  country           String
+  status            String    @default("APPROVED")
+  rating            Float     @default(0)
+  totalOrders       Int       @default(0)
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quotations        Quotation[]
+  rfqAssignments    RfqVendor[]
+  purchaseOrders    PurchaseOrder[]
+  invoices          Invoice[]
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([email])
+}
+
+model RFQ {
+  id                String    @id @default(cuid())
+  rfqNumber         String    @unique @default(cuid())
+  title             String
+  description       String
+  category          String
+  expectedDeliveryDate DateTime
+  deadline          DateTime
+  attachments       String?
+  createdBy         String
+  status            String    @default("DRAFT")
+
+  user              User      @relation("RFQCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  lineItems         LineItem[]
+  assignedVendors   RfqVendor[]
+  quotations        Quotation[]
+  purchaseOrders    PurchaseOrder[]
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([createdBy])
+  @@index([status])
+  @@index([deadline])
+}
+
+model LineItem {
+  id            String    @id @default(cuid())
+  rfqId         String
+  itemName      String
+  description   String?
+  quantity      Int
+  unit          String    // e.g. "pcs", "kg", "litre"
+  createdAt     DateTime  @default(now())
+
+  rfq           RFQ       @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+
+  @@index([rfqId])
+}
+
+model RfqVendor {
+  id                String    @id @default(cuid())
+  rfqId             String
+  vendorId          String
+
+  rfq               RFQ       @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  vendor            Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime  @default(now())
+
+  @@unique([rfqId, vendorId])
+  @@index([rfqId])
+  @@index([vendorId])
+}
+
+model Quotation {
+  id                String    @id @default(cuid())
+  quotationNumber   String    @unique @default(cuid())
+  vendorId          String
+  rfqId             String
+  basePrice         Float
+  tax               Float
+  discount          Float
+  finalAmount       Float
+  deliveryDays      Int
+  remarks           String?
+  attachment        String?
+  status            String    @default("SUBMITTED")
+
+  vendor            Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  rfq               RFQ       @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  approval          Approval?
+  purchaseOrder     PurchaseOrder?
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([rfqId, vendorId])
+  @@index([vendorId])
+  @@index([rfqId])
+  @@index([status])
+}
+
+model Approval {
+  id                String    @id @default(cuid())
+  quotationId       String    @unique
+  createdBy         String
+  approvedBy        String?
+  status            String    @default("PENDING")
+  remarks           String?
+
+  quotation         Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  createdByUser     User      @relation("ApprovalCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  approvedByUser    User?     @relation("ApprovalApprover", fields: [approvedBy], references: [id])
+  purchaseOrder     PurchaseOrder?
+
+  createdAt         DateTime  @default(now())
+  approvedAt        DateTime?
+
+  @@index([quotationId])
+  @@index([status])
+  @@index([createdBy])
+}
+
+model PurchaseOrder {
+  id                String    @id @default(cuid())
+  poNumber          String    @unique
+  quotationId       String    @unique
+  vendorId          String
+  rfqId             String
+  approvalId        String?   @unique
+  quantity          Int
+  unitPrice         Decimal
+  subtotal          Decimal
+  cgst              Decimal   @default(9.0)
+  sgst              Decimal   @default(9.0)
+  cgstAmount        Decimal
+  sgstAmount        Decimal
+  totalAmount       Decimal
+  deliveryDate      DateTime
+  status            String    @default("GENERATED")
+  createdBy         String
+
+  quotation         Quotation @relation(fields: [quotationId], references: [id], onDelete: Restrict)
+  vendor            Vendor    @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  rfq               RFQ       @relation(fields: [rfqId], references: [id], onDelete: Restrict)
+  approval          Approval? @relation(fields: [approvalId], references: [id])
+  createdByUser     User      @relation("POCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  invoices          Invoice[]
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([vendorId])
+  @@index([rfqId])
+  @@index([quotationId])
+  @@index([status])
+}
+
+model Invoice {
+  id                String    @id @default(cuid())
+  poId              String
+  vendorId          String
+  invoiceNumber     String    @unique
+  amount            Decimal
+  status            String    @default("SUBMITTED")
+  dueDate           DateTime
+  
+  purchaseOrder     PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
+  vendor            Vendor    @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  @@index([poId])
+  @@index([vendorId])
+  @@index([status])
+}
+
+model ActivityLog {
+  id                String    @id @default(cuid())
+  userId            String
+  action            String
+  entity            String
+  entityId          String
+  changes           String?
+  description       String?
+  ipAddress         String?
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime  @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity])
+  @@index([entityId])
+  @@index([createdAt])
+}
